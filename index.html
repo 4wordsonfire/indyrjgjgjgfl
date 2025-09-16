@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MVP — 24h Wind (Владивосток) · Multi‑source + Accuracy</title>
+  <style>
+    :root{
+      --bg:#0b0d10; --card:#12151a; --muted:#8ea1b1; --text:#e7eef6; --accent:#3ec7ff; --accent2:#8bffa8; --accent3:#c6a5ff;
+      --danger:#ff5c7a; --warn:#ffcc66; --ok:#8bffa8;
+    }
+    html,body{height:100%}
+    body{ margin:0; background:linear-gradient(180deg, #0a0c0f, #0b1016 60%, #0a0e12); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","Apple Color Emoji","Segoe UI Emoji"}
+    .wrap{max-width:1140px; margin:24px auto; padding:0 16px}
+    header{display:flex; gap:14px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin-bottom:14px}
+    .title{display:flex; gap:12px; align-items:center}
+    .badge{font-size:12px; padding:4px 8px; border-radius:999px; background:#0f1319; border:1px solid #1d2733; color:#bcd1e6}
+    .card{background:var(--card); border:1px solid #1b2530; border-radius:14px; padding:14px; box-shadow:0 6px 24px rgba(0,0,0,.25)}
+    .controls{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    .chip{background:#0f141a; border:1px solid #1e2a37; color:#cfe6ff; padding:8px 10px; border-radius:10px; cursor:pointer; user-select:none}
+    .chip[aria-pressed="true"]{background:#10202a; border-color:#1d3d50; color:#bff0ff}
+    .chip:focus{outline:2px solid #2aa9ff; outline-offset:2px}
+    .muted{color:var(--muted)} .small{font-size:12px} .right{margin-left:auto}
+
+    table{width:100%; border-collapse:separate; border-spacing:0; overflow:auto; border-radius:12px}
+    thead th{position:sticky; top:0; background:#0f141a; z-index:1; font-weight:600; color:#c9d9ea; border-bottom:1px solid #1f2a35; white-space:nowrap}
+    th,td{padding:8px 8px; text-align:left; vertical-align:middle}
+    tbody tr{border-bottom:1px solid #121c26}
+    tbody tr:nth-child(2n){background:#0e1319}
+
+    .arrow{width:22px; height:22px; display:inline-block; vertical-align:middle}
+    .cell{display:flex; align-items:center; gap:6px}
+    .windv{font-weight:600}
+    .gust{color:#9cb6cc; font-size:11px}
+    .dir{color:#9cb6cc; font-size:11px}
+    .err{background:#2a0f16; border:1px solid #4d1b25; color:#ffd6de; padding:10px 12px; border-radius:10px; margin-top:10px}
+    .ok{color:var(--accent2)} .warn{color:var(--warn)}
+    .grid{display:grid; grid-template-columns: 1fr auto; gap:10px; align-items:center}
+    .foot{color:#8aa1b4; font-size:12px; margin-top:12px}
+    input[type="number"], select, input[type="text"]{background:#0f141a; color:#e7eef6; border:1px solid #1e2a37; border-radius:8px; padding:8px}
+    .inline-form{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    .sourceTag{font-size:11px; color:#b5c7db}
+    .k{opacity:.8}
+
+    /* ЯРКОЕ выделение победителя: шапка и колонка */
+    .bestHead{color:#09150f; background:linear-gradient(180deg, rgba(139,255,168,0.85), rgba(139,255,168,0.55)); border-bottom:1px solid #1f5038}
+    .bestCell{background:linear-gradient(180deg, rgba(139,255,168,0.22), rgba(139,255,168,0.10)); box-shadow: inset 2px 0 0 rgba(139,255,168,0.60), inset -2px 0 0 rgba(139,255,168,0.60)}
+
+    /* Score (accuracy) block — победитель подсвечен строкой */
+    .score{display:grid; grid-template-columns: 1fr auto auto auto; gap:8px; align-items:center}
+    .score .h{font-weight:600; color:#c9d9ea}
+    .winCell{background:rgba(139,255,168,0.18); border:1px solid #2d6b4a; border-radius:8px; padding:2px 6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M3 12c4-2 6-2 9-2s5 0 9 2" stroke="#8bffa8" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M3 16c4-2 6-2 9-2s5 0 9 2" stroke="#3ec7ff" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M3 8c4-2 6-2 9-2s5 0 9 2" stroke="#c6a5ff" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <h1 style="margin:0;font-size:18px">24‑часовой прогноз ветра — Владивосток · Сравнение моделей</h1>
+        <span class="badge" id="bestBadge" title="Лидер точности за последние 24ч">—</span>
+      </div>
+      <div class="controls">
+        <button class="chip" id="refreshBtn" type="button">Обновить</button>
+        <button class="chip" id="unitsMs" type="button" aria-pressed="true">м/с</button>
+        <button class="chip" id="unitsKt" type="button" aria-pressed="false">kn</button>
+        <button class="chip" id="testBtn" type="button" title="Запустить самотест">Тест</button>
+        <label class="chip" style="display:flex;gap:6px;align-items:center">
+          Ячейка: 
+          <select id="cellSel">
+            <option value="land" selected>суша (берег)</option>
+            <option value="sea">море (акватория)</option>
+            <option value="nearest">ближайшая</option>
+          </select>
+        </label>
+      </div>
+    </header>
+
+    <div class="card" style="margin-bottom:10px">
+      <form class="inline-form" id="locForm">
+        <label>Координаты базы:
+          <input id="lat" type="number" step="0.000001" value="43.120261" title="Широта (база Силы ветра)" />
+        </label>
+        <label>
+          <input id="lon" type="number" step="0.000001" value="131.874660" title="Долгота (база Силы ветра)" />
+        </label>
+        <label>METAR станция:
+          <input id="metarStation" type="text" value="UHWW" title="ICAO код (напр., UHWW — Vladivostok/Knevichi)" maxlength="4" style="text-transform:uppercase;width:90px" />
+        </label>
+        <button class="chip" type="submit">Применить</button>
+        <button class="chip" type="button" id="scoreBtn">Оценить точность (24ч)</button>
+        <span class="muted small right" id="fetchInfo">—</span>
+      </form>
+      <div class="small muted" style="margin-top:6px">Адрес: ул. Батарейная, 3 (ориентир: Спортивная гавань). Координаты по справочникам: 43.120261, 131.874660. Факт берем из METAR аэропорта <b>UHWW</b> (VVO) — ~35 км от базы; для воды возможна систематическая разница.</div>
+    </div>
+
+    <div id="errorBox" class="err" style="display:none"></div>
+    <div id="corsHint" class="err" style="display:none; background:#1a1f28; border-color:#273446; color:#cfe1f5">Похоже, файл открыт напрямую с диска (<code>file://</code>). Некоторые источники блокируют такие запросы. Быстрый фикс: запустите локальный сервер, например <code>python3 -m http.server 8000</code>, и откройте <code>http://localhost:8000/имя_файла.html</code>.</div>
+
+    <div class="card" style="margin-bottom:10px">
+      <div class="grid" style="margin-bottom:8px">
+        <div class="muted small">10 м над землёй · Порывы — максимум за предыдущий час · Сравниваем ближайшие 24 часа</div>
+        <div class="small right">Ед. изм.: <span id="unitLabel" class="ok">м/с</span></div>
+      </div>
+      <table id="windTable" aria-describedby="Почасовой прогноз ветра на 24 часа из нескольких моделей">
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="foot">
+        Источники: <span class="sourceTag">/v1/gfs</span>, <span class="sourceTag">/v1/ecmwf</span>, <span class="sourceTag">/v1/dwd-icon</span>, <span class="sourceTag">/v1/jma</span>. Все запросы без ключей; время локализовано в Asia/Vladivostok. Стрелка показывает <b>куда</b> дует; азимут — <span class="k">откуда</span>.
+      </div>
+    </div>
+
+    <div id="scoreCard" class="card" style="display:none">
+      <div class="grid" style="margin-bottom:8px">
+        <div class="muted small">Сравнение точности за последние 24ч (по METAR станции). Метрика: MAE по скорости (м/с) + справочно MAE по направлению (°). Победитель подсвечен цветом.</div>
+        <div class="small right" id="obsInfo">—</div>
+      </div>
+      <div class="score" id="scoreTable">
+        <div class="h">Модель</div><div class="h">N часов</div><div class="h">MAE скорость</div><div class="h">MAE направление</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const TIMEZONE = "Asia/Vladivostok";
+      const HRS_AHEAD = 24;
+      const state = { unit:'ms', cell:'land', data:{}, timeKeys:[], errors:[], best:null, pastMaps:{}, obs:{} };
+
+      const SOURCES = [
+        { id:'gfs',   name:'GFS',    base:'https://api.open-meteo.com/v1/gfs' },
+        { id:'ecmwf', name:'ECMWF',  base:'https://api.open-meteo.com/v1/ecmwf' },
+        { id:'icon',  name:'ICON',   base:'https://api.open-meteo.com/v1/dwd-icon' },
+        { id:'jma',   name:'JMA',    base:'https://api.open-meteo.com/v1/jma' }
+      ];
+
+      const el = {
+        thead: document.getElementById('thead'),
+        tbody: document.getElementById('tbody'),
+        error: document.getElementById('errorBox'),
+        unitLabel: document.getElementById('unitLabel'),
+        fetchInfo: document.getElementById('fetchInfo'),
+        lat: document.getElementById('lat'), lon: document.getElementById('lon'),
+        refresh: document.getElementById('refreshBtn'),
+        unitsMs: document.getElementById('unitsMs'), unitsKt: document.getElementById('unitsKt'),
+        locForm: document.getElementById('locForm'), cellSel: document.getElementById('cellSel'),
+        scoreBtn: document.getElementById('scoreBtn'),
+        bestBadge: document.getElementById('bestBadge'),
+        scoreCard: document.getElementById('scoreCard'), scoreTable: document.getElementById('scoreTable'), obsInfo: document.getElementById('obsInfo'),
+        metarStation: document.getElementById('metarStation'),
+        testBtn: document.getElementById('testBtn')
+      };
+
+      function fmtOffset(sec){ const sign = sec>=0?'+':'-'; const a=Math.abs(sec); const h=Math.floor(a/3600); const m=Math.floor((a%3600)/60); return sign+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0'); }
+      function toEpochLocalIso(isoLocal, off){ return Date.parse(isoLocal + fmtOffset(off)); }
+      function toCardinal(deg){ const dirs=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW']; const idx=Math.round(((deg%360)+360)%360/22.5)%16; return dirs[idx]; }
+      function arrowSVG(rot){ return `<svg class="arrow" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="transform:rotate(${rot}deg)"><path d="M12 3v12" stroke="#9fd9ff" stroke-width="2" stroke-linecap="round"/><path d="M7 9l5-6 5 6" fill="none" stroke="#9fd9ff" stroke-width="2" stroke-linejoin="round"/></svg>`; }
+      function conv(unit, v){ if(v==null) return null; return unit==='ms'? v : v*1.9438444924406; }
+      const fmt = v => (Math.round(v*10)/10).toFixed(1);
+
+      function buildURL(src, lat, lon, cell){
+        const p = new URLSearchParams({ latitude:String(lat), longitude:String(lon),
+          hourly:'wind_speed_10m,wind_direction_10m,wind_gusts_10m', wind_speed_unit:'ms', timezone:TIMEZONE, cell_selection:cell,
+          past_days:'1', forecast_days:'1' });
+        return src.base + '?' + p.toString();
+      }
+
+      async function fetchAll(){
+        const lat = parseFloat(el.lat.value), lon = parseFloat(el.lon.value), cell = el.cellSel.value;
+        state.errors = []; el.error.style.display='none'; el.fetchInfo.textContent='Загрузка…'; state.best=null;
+        const t0 = performance.now();
+        const tasks = SOURCES.map(async s => {
+          const url = buildURL(s, lat, lon, cell);
+          try{
+            const r = await fetch(url, { cache:'no-cache' }); if(!r.ok) throw new Error(`${s.name}: HTTP ${r.status}`);
+            const j = await r.json(); state.data[s.id] = j; return { id:s.id, ok:true };
+          }catch(e){ state.data[s.id] = null; state.errors.push(e.message); return { id:s.id, ok:false, err:e }; }
+        });
+        await Promise.allSettled(tasks);
+        const t1 = performance.now(); el.fetchInfo.textContent = `Готово за ${(t1-t0).toFixed(0)} мс · ${SOURCES.length - state.errors.length}/${SOURCES.length} источ.`;
+        if(state.errors.length){ el.error.textContent = 'Проблемы с источниками: '+state.errors.join(' · '); el.error.style.display='block'; }
+        buildTimeKeys();
+        cachePastMaps();
+        render();
+      }
+
+      function takeFuture24(d){
+        if(!d || !d.hourly) return [];
+        const off = d.utc_offset_seconds||0; const time=d.hourly.time; const wsp=d.hourly.wind_speed_10m||[]; const wgd=d.hourly.wind_gusts_10m||[]; const wdr=d.hourly.wind_direction_10m||[];
+        const now = Date.now(); const until = now + HRS_AHEAD*3600*1000; const rows=[];
+        for(let i=0;i<time.length;i++){ const epoch = toEpochLocalIso(time[i], off); if(epoch>=now && epoch<until){ rows.push({t:time[i], epoch, sp:wsp[i], gs:wgd[i], dir:wdr[i]}); } }
+        if(rows.length===0){ let si=time.findIndex(t=>toEpochLocalIso(t,off)>=now); if(si<0) si=0; for(let i=si;i<Math.min(si+24,time.length);i++){ rows.push({t:time[i], epoch:toEpochLocalIso(time[i],off), sp:wsp[i], gs:wgd[i], dir:wdr[i]}); } }
+        return rows;
+      }
+
+      function takePast24(d){
+        if(!d || !d.hourly) return [];
+        const off = d.utc_offset_seconds||0; const time=d.hourly.time; const wsp=d.hourly.wind_speed_10m||[]; const wgd=d.hourly.wind_gusts_10m||[]; const wdr=d.hourly.wind_direction_10m||[];
+        const now = Date.now(); const since = now - HRS_AHEAD*3600*1000; const rows=[];
+        for(let i=0;i<time.length;i++){ const epoch = toEpochLocalIso(time[i], off); if(epoch>=since && epoch<now){ rows.push({t:time[i], epoch, sp:wsp[i], gs:wgd[i], dir:wdr[i]}); } }
+        return rows;
+      }
+
+      function buildTimeKeys(){
+        const ref = state.data.gfs || state.data.ecmwf || state.data.icon || state.data.jma;
+        const rows = takeFuture24(ref);
+        state.timeKeys = rows.map(r=>({ t:r.t, epoch:r.epoch }));
+      }
+
+      function indexByTime(rows){ const map=new Map(); for(const r of rows){ map.set(r.t, r); } return map; }
+      function cachePastMaps(){
+        state.pastMaps = {};
+        for(const s of SOURCES){
+          const d = state.data[s.id];
+          const rows = takePast24(d);
+          state.pastMaps[s.id] = indexByTime(rows);
+        }
+      }
+
+      function render(){
+        const unit = state.unit; el.unitLabel.textContent = unit==='ms'? 'м/с':'kn';
+        const thModelCols = SOURCES.map(s=>`<th colspan="2" ${state.best===s.id? 'class="bestHead"':''}>${s.name}</th>`).join('');
+        el.thead.innerHTML = `<tr><th>Время</th>${thModelCols}</tr>`;
+
+        const maps = {}; for(const s of SOURCES){ const d=state.data[s.id]; maps[s.id] = d? indexByTime(takeFuture24(d)) : new Map(); }
+
+        const fmtTime = new Intl.DateTimeFormat('ru-RU',{ timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'});
+        const rowsHtml = state.timeKeys.map(key=>{
+          const tds = SOURCES.map(s=>{
+            const rec = maps[s.id].get(key.t);
+            const cls = state.best===s.id? 'bestCell':'';
+            if(!rec) return `<td class="muted ${cls}" colspan="2">—</td>`;
+            const toDeg = ((rec.dir??0)+180)%360; const fromDeg = rec.dir??null;
+            const sp = rec.sp!=null? conv(unit, rec.sp): null; const gs = rec.gs!=null? conv(unit, rec.gs): null;
+            const dirTxt = fromDeg!=null? `${Math.round(fromDeg)}° (${toCardinal(fromDeg)})` : '—';
+            return `<td class="${cls}"><div class="cell"><span class="windv">${sp!=null? fmt(sp):'—'}</span> <span class="muted small">${unit}</span><span class="gust">${gs!=null? ' (порывы '+fmt(gs)+')':''}</span><div class="dir">${dirTxt}</div></div></td>
+                    <td class="${cls}">${arrowSVG(toDeg)}</td>`;
+          }).join('');
+          return `<tr><td>${fmtTime.format(key.epoch)}</td>${tds}</tr>`;
+        }).join('');
+
+        el.tbody.innerHTML = rowsHtml || '<tr><td colspan="10" class="muted">Нет данных</td></tr>';
+      }
+
+      // === Accuracy against METAR ===
+      function nearestHourLocal(date){
+        const d = new Date(date); const m = d.getMinutes(); d.setMinutes(0,0,0);
+        if(m>=30) d.setHours(d.getHours()+1); return d;
+      }
+      function degDiff(a,b){ if(a==null||b==null) return null; let d = Math.abs(((a - b + 540) % 360) - 180); return d; }
+
+      async function fetchMETAR(station){
+        const base = `https://aviationweather.gov/adds/dataserver_current/httpparam?datasource=metars&requestType=retrieve&format=geojson&stationString=${encodeURIComponent(station)}&hoursBeforeNow=24`;
+
+        async function fetchJSON(url){
+          const r = await fetch(url, { cache:'no-cache' });
+          if(!r.ok) throw new Error(`HTTP ${r.status}`);
+          return await r.json();
+        }
+        async function fetchJSONWithFallback(url){
+          // 1) Try direct (likely CORS-blocked)
+          try{ return await fetchJSON(url); }
+          catch(e1){
+            // 2) Try Netlify Function proxy if deployed there
+            try{
+              const prox = '/.netlify/functions/proxy?url=' + encodeURIComponent(url);
+              const r2 = await fetch(prox, { cache:'no-cache' });
+              if(!r2.ok) throw new Error(`Netlify proxy HTTP ${r2.status}`);
+              const txt2 = await r2.text();
+              try { return JSON.parse(txt2); } catch(e){ throw new Error('Netlify proxy non-JSON'); }
+            }catch(e2){
+              // 3) Fallback to AllOrigins
+              try{
+                const ao = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+                const r3 = await fetch(ao, { cache:'no-cache' });
+                if(!r3.ok) throw new Error(`AllOrigins HTTP ${r3.status}`);
+                const txt3 = await r3.text();
+                try { return JSON.parse(txt3); } catch(e){ throw new Error('AllOrigins non-JSON'); }
+              }catch(e3){
+                throw new Error(`${e1.message} | ${e2.message} | ${e3.message}`);
+              }
+            }
+          }
+        }
+
+        const j = await fetchJSONWithFallback(base);
+        const feats = j && j.features ? j.features : [];
+        const records = feats.map(f=>f.properties).filter(p=>p);
+        const tz = TIMEZONE;
+        const map = new Map();
+        for(const p of records){
+          const iso = p.observation_time; // UTC time string
+          const utcMs = Date.parse(iso);
+          const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz, hour12:false, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit'});
+          const key = fmt.format(nearestHourLocal(new Date(utcMs)).getTime());
+          const spKt = Number(p.wind_speed_kt); const gsKt = p.wind_gust_kt!=null? Number(p.wind_gust_kt): null; const dir = p.wind_dir_degrees!=null? Number(p.wind_dir_degrees): null;
+          const sp = isFinite(spKt)? spKt*0.514444 : null; const gs = isFinite(gsKt)? gsKt*0.514444 : null;
+          map.set(key, { sp, gs, dir, raw:p.raw_text, time: p.observation_time });
+        }
+        return { station, map, count: records.length };
+      }
+
+      function buildPastKeyIndex(){
+        const idx = {};
+        const fmt = new Intl.DateTimeFormat('en-CA',{ timeZone: TIMEZONE, hour12:false, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit'});
+        for(const s of SOURCES){
+          const map = state.pastMaps[s.id] || new Map();
+          const m2 = new Map();
+          for(const [t, rec] of map.entries()){
+            const epoch = rec.epoch;
+            const key = fmt.format(epoch);
+            m2.set(key, rec);
+          }
+          idx[s.id] = m2;
+        }
+        return idx;
+      }
+
+      async function assessAccuracy(){
+        try{
+          const station = (el.metarStation.value||'UHWW').trim().toUpperCase();
+          el.error.style.display='none'; el.obsInfo.textContent='Загрузка METAR…';
+          const obs = await fetchMETAR(station);
+          el.obsInfo.textContent = `METAR ${station}: записей ${obs.count}`;
+          state.obs = obs;
+          const idx = buildPastKeyIndex();
+
+          const results = [];
+          let best = null;
+          for(const s of SOURCES){
+            const m = idx[s.id] || new Map();
+            let n=0, sumSp=0, sumDir=0;
+            for(const [key, o] of obs.map.entries()){
+              const rec = m.get(key);
+              if(!rec) continue;
+              const eSp = (o.sp!=null && rec.sp!=null)? Math.abs(rec.sp - o.sp) : null;
+              const eDir = (o.dir!=null && rec.dir!=null)? degDiff(rec.dir, o.dir) : null;
+              if(eSp==null && eDir==null) continue;
+              if(eSp!=null){ sumSp += eSp; }
+              if(eDir!=null){ sumDir += eDir; }
+              n++;
+            }
+            const maeSp = n? (sumSp/n) : null;
+            const maeDir = n? (sumDir/n) : null;
+            results.push({ id:s.id, name:s.name, n, maeSp, maeDir });
+            if(n && maeSp!=null){
+              if(!best || maeSp < best.maeSp - 1e-6 || (Math.abs(maeSp - best.maeSp) < 1e-6 && (maeDir??1e9) < (best.maeDir??1e9))){
+                best = { id:s.id, name:s.name, maeSp, maeDir, n };
+              }
+            }
+          }
+
+          const unit = 'м/с';
+          const header = '<div class="h">Модель</div><div class="h">N часов</div><div class="h">MAE скорость</div><div class="h">MAE направление</div>';
+          const body = results.map(r=>{
+            const win = best && r.id===best.id; const cls = win? 'winCell' : '';
+            const maeSp = r.maeSp!=null? (Math.round(r.maeSp*10)/10).toFixed(1)+' '+unit : '—';
+            const maeDir = r.maeDir!=null? Math.round(r.maeDir).toString()+'°' : '—';
+            return `<div class="${cls}">${r.name}</div><div class="${cls}">${r.n}</div><div class="${cls}">${maeSp}</div><div class="${cls}">${maeDir}</div>`;
+          }).join('');
+          el.scoreTable.innerHTML = header + body;
+          el.scoreCard.style.display = 'block';
+
+          state.best = best? best.id : null;
+          el.bestBadge.textContent = best? `Лучший за 24ч: ${best.name} (MAE ${(Math.round(best.maeSp*10)/10).toFixed(1)} м/с)` : '—';
+          render();
+        }catch(e){
+          el.error.textContent = `Оценка точности не удалась: ${e.message}
+Возможная причина — CORS/прокси. Если сайт на Netlify, убедитесь, что функция /.netlify/functions/proxy задеплоена.
+Код станции проверьте (например, UHWW).`;
+          el.error.style.display = 'block';
+        }
+      }
+
+      // === Самотесты (минимальные) ===
+      function runSelfTests(){
+        const out = [];
+        try{
+          console.assert(conv('ms', 5) === 5, 'conv ms→ms');
+          console.assert(Math.abs(conv('kn', 10) - 19.4384) < 0.01, 'conv ms→kn');
+          console.assert(toCardinal(0) === 'N' && toCardinal(90) === 'E' && toCardinal(225) === 'SW', 'toCardinal');
+          const u = buildURL(SOURCES[0], 43.12, 131.88, 'land');
+          console.assert(u.includes('latitude=43.12') && u.includes('cell_selection=land'), 'buildURL params');
+          out.push('✅ Самотесты прошли');
+        }catch(err){ out.push('❌ Самотесты: ' + err.message); }
+        el.fetchInfo.textContent = out.join(' · ');
+      }
+
+      // Events
+      el.refresh.addEventListener('click', fetchAll);
+      el.unitsMs.addEventListener('click', ()=>{ state.unit='ms'; el.unitsMs.setAttribute('aria-pressed','true'); el.unitsKt.setAttribute('aria-pressed','false'); render(); });
+      el.unitsKt.addEventListener('click', ()=>{ state.unit='kn'; el.unitsKt.setAttribute('aria-pressed','true'); el.unitsMs.setAttribute('aria-pressed','false'); render(); });
+      el.cellSel.addEventListener('change', fetchAll);
+      el.locForm.addEventListener('submit', (e)=>{ e.preventDefault(); fetchAll(); });
+      el.scoreBtn.addEventListener('click', assessAccuracy);
+      el.testBtn.addEventListener('click', runSelfTests);
+
+      if(location.protocol === 'file:'){
+        const hint = document.getElementById('corsHint'); if(hint) hint.style.display='block';
+      }
+      fetchAll();
+    })();
+  </script>
+</body>
+</html>
