@@ -166,7 +166,7 @@
       function buildURL(src, lat, lon, cell){
         const p = new URLSearchParams({ latitude:String(lat), longitude:String(lon),
           hourly:'wind_speed_10m,wind_direction_10m,wind_gusts_10m', wind_speed_unit:'ms', timezone:TIMEZONE, cell_selection:cell,
-          past_days:'1', forecast_days:'1' });
+          past_days:'1', forecast_days:'2' });
         return src.base + '?' + p.toString();
       }
 
@@ -192,10 +192,22 @@
       function takeFuture24(d){
         if(!d || !d.hourly) return [];
         const off = d.utc_offset_seconds||0; const time=d.hourly.time; const wsp=d.hourly.wind_speed_10m||[]; const wgd=d.hourly.wind_gusts_10m||[]; const wdr=d.hourly.wind_direction_10m||[];
-        const now = Date.now(); const until = now + HRS_AHEAD*3600*1000; const rows=[];
-        for(let i=0;i<time.length;i++){ const epoch = toEpochLocalIso(time[i], off); if(epoch>=now && epoch<until){ rows.push({t:time[i], epoch, sp:wsp[i], gs:wgd[i], dir:wdr[i]}); } }
-        if(rows.length===0){ let si=time.findIndex(t=>toEpochLocalIso(t,off)>=now); if(si<0) si=0; for(let i=si;i<Math.min(si+24,time.length);i++){ rows.push({t:time[i], epoch:toEpochLocalIso(time[i],off), sp:wsp[i], gs:wgd[i], dir:wdr[i]}); } }
-        return rows;
+        const now = Date.now(); const until = now + HRS_AHEAD*3600*1000; const rows=[]; const future=[];
+        for(let i=0;i<time.length;i++){
+          const epoch = toEpochLocalIso(time[i], off);
+          if(epoch>=now){ future.push({t:time[i], epoch, sp:wsp[i], gs:wgd[i], dir:wdr[i]}); }
+          if(epoch>=now && epoch<until){ rows.push({t:time[i], epoch, sp:wsp[i], gs:wgd[i], dir:wdr[i]}); }
+        }
+        if(future.length===0){
+          for(let i=0;i<Math.min(HRS_AHEAD,time.length);i++){
+            const epoch = toEpochLocalIso(time[i], off);
+            future.push({t:time[i], epoch, sp:wsp[i], gs:wgd[i], dir:wdr[i]});
+          }
+        }
+        if(rows.length < HRS_AHEAD){
+          return future.slice(0, HRS_AHEAD);
+        }
+        return rows.slice(0, HRS_AHEAD);
       }
 
       function takePast24(d){
@@ -283,13 +295,15 @@
             const viaNetlify = await attempt('Netlify proxy', async ()=>{
               const prox = '/.netlify/functions/proxy?url=' + encodeURIComponent(url);
               const r2 = await fetch(prox, { cache:'no-cache' });
-              if(!r2.ok){
-                let detail = '';
-                try{ detail = await r2.text(); }catch(_){ /* ignore */ }
-                detail = detail ? ` — ${detail}` : '';
-                throw new Error(`HTTP ${r2.status}${detail}`);
-              }
               const txt2 = await r2.text();
+              if(!r2.ok){
+                const normalized = txt2 ? txt2.trim() : '';
+                if(r2.status === 403 && /The request is blocked/i.test(normalized)){
+                  throw new Error('HTTP 403 (Netlify заблокировал запрос — убедитесь, что функция /.netlify/functions/proxy задеплоена через Git)');
+                }
+                const snippet = normalized ? ` — ${normalized.slice(0,200)}` : '';
+                throw new Error(`HTTP ${r2.status}${snippet}`);
+              }
               try { return JSON.parse(txt2); } catch(_){ throw new Error('invalid JSON'); }
             });
             if(viaNetlify) return viaNetlify;
