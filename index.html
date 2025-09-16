@@ -263,29 +263,60 @@
           return await r.json();
         }
         async function fetchJSONWithFallback(url){
-          // 1) Try direct (likely CORS-blocked)
-          try{ return await fetchJSON(url); }
-          catch(e1){
-            // 2) Try Netlify Function proxy if deployed there
+          const errors = [];
+
+          async function attempt(label, fn){
             try{
-              const prox = '/.netlify/functions/proxy?url=' + encodeURIComponent(url);
-              const r2 = await fetch(prox, { cache:'no-cache' });
-              if(!r2.ok) throw new Error(`Netlify proxy HTTP ${r2.status}`);
-              const txt2 = await r2.text();
-              try { return JSON.parse(txt2); } catch(e){ throw new Error('Netlify proxy non-JSON'); }
-            }catch(e2){
-              // 3) Fallback to AllOrigins
-              try{
-                const ao = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-                const r3 = await fetch(ao, { cache:'no-cache' });
-                if(!r3.ok) throw new Error(`AllOrigins HTTP ${r3.status}`);
-                const txt3 = await r3.text();
-                try { return JSON.parse(txt3); } catch(e){ throw new Error('AllOrigins non-JSON'); }
-              }catch(e3){
-                throw new Error(`${e1.message} | ${e2.message} | ${e3.message}`);
-              }
+              const data = await fn();
+              if(data == null) throw new Error('empty response');
+              return data;
+            }catch(err){
+              errors.push(`${label}: ${err.message}`);
+              return null;
             }
           }
+
+          const direct = await attempt('Direct', ()=>fetchJSON(url));
+          if(direct) return direct;
+
+          if(location.protocol !== 'file:'){
+            const viaNetlify = await attempt('Netlify proxy', async ()=>{
+              const prox = '/.netlify/functions/proxy?url=' + encodeURIComponent(url);
+              const r2 = await fetch(prox, { cache:'no-cache' });
+              if(!r2.ok){
+                let detail = '';
+                try{ detail = await r2.text(); }catch(_){ /* ignore */ }
+                detail = detail ? ` — ${detail}` : '';
+                throw new Error(`HTTP ${r2.status}${detail}`);
+              }
+              const txt2 = await r2.text();
+              try { return JSON.parse(txt2); } catch(_){ throw new Error('invalid JSON'); }
+            });
+            if(viaNetlify) return viaNetlify;
+          }else{
+            errors.push('Netlify proxy: skipped for file://');
+          }
+
+          const viaAllOrigins = await attempt('AllOrigins', async ()=>{
+            const aoUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(url) + `&timestamp=${Date.now()}`;
+            const r3 = await fetch(aoUrl, { cache:'no-cache' });
+            if(!r3.ok) throw new Error(`HTTP ${r3.status}`);
+            const j3 = await r3.json();
+            if(!j3 || typeof j3.contents !== 'string' || !j3.contents.length) throw new Error('empty body');
+            try { return JSON.parse(j3.contents); } catch(_){ throw new Error('invalid JSON'); }
+          });
+          if(viaAllOrigins) return viaAllOrigins;
+
+          const viaThingproxy = await attempt('Thingproxy', async ()=>{
+            const proxUrl = 'https://thingproxy.freeboard.io/fetch/' + encodeURIComponent(url);
+            const r4 = await fetch(proxUrl, { cache:'no-cache' });
+            if(!r4.ok) throw new Error(`HTTP ${r4.status}`);
+            const txt4 = await r4.text();
+            try { return JSON.parse(txt4); } catch(_){ throw new Error('invalid JSON'); }
+          });
+          if(viaThingproxy) return viaThingproxy;
+
+          throw new Error(errors.join(' | '));
         }
 
         const j = await fetchJSONWithFallback(base);
